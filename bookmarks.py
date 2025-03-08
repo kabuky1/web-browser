@@ -1,6 +1,8 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
                            QTableWidget, QTableWidgetItem, QLineEdit, QLabel,
-                           QComboBox, QInputDialog, QMainWindow, QToolButton)
+                           QComboBox, QInputDialog, QMainWindow, QToolButton, QApplication)
+from PyQt5.QtCore import Qt, QMimeData
+from PyQt5.QtGui import QDrag, QDragEnterEvent, QDropEvent
 from themes import apply_theme
 import json
 
@@ -177,6 +179,7 @@ class BookmarkButton(QToolButton):
         self.setText(title)
         self.url = url
         self.browser = self.get_browser_window(parent)
+        self.drag_start_position = None
 
     def get_browser_window(self, widget):
         """Find the main browser window instance"""
@@ -185,6 +188,29 @@ class BookmarkButton(QToolButton):
                 return widget
             widget = widget.parent()
         return None
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.drag_start_position = e.pos()
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if not (e.buttons() & Qt.LeftButton):
+            return
+        if (e.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
+            return
+            
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setText(self.url)  # Store URL for drop handling
+        drag.setMimeData(mime)
+        
+        # Set drag pixmap or icon if desired
+        # drag.setPixmap(self.icon().pixmap(32, 32))
+        
+        if drag.exec_(Qt.MoveAction) == Qt.MoveAction:
+            # The bookmark was successfully moved to a folder
+            pass
 
     def delete_bookmark(self):
         try:

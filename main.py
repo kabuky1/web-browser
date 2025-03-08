@@ -1,10 +1,10 @@
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                           QWidget, QLineEdit, QPushButton, QMenu, QAction, QDialog,
-                          QTableWidgetItem, QStatusBar, QLabel, QToolBar, QToolButton)
+                          QTableWidgetItem, QStatusBar, QLabel, QToolBar, QToolButton, QInputDialog)
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings, QWebEnginePage, QWebEngineProfile
 from PyQt5.QtCore import QUrl, QObject, pyqtSlot, QTimer, Qt, QMimeData
 from PyQt5.QtWebEngineCore import QWebEngineUrlRequestInterceptor
-from PyQt5.QtGui import QDrag
+from PyQt5.QtGui import QDrag, QDragEnterEvent, QDropEvent
 import os
 import sys
 import json
@@ -36,24 +36,34 @@ class BookmarkButton(QToolButton):
         self.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
-        
+        self.drag_start_position = None
+
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
             self.drag_start_position = e.pos()
         super().mousePressEvent(e)
-        
+
     def mouseMoveEvent(self, e):
         if not (e.buttons() & Qt.LeftButton):
             return
+        if not self.drag_start_position:
+            return
         if (e.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
             return
-            
+
         drag = QDrag(self)
         mime = QMimeData()
         mime.setText(self.url)
+        mime.setProperty('title', self.text())
         drag.setMimeData(mime)
-        drag.exec_(Qt.MoveAction)
         
+        result = drag.exec_(Qt.MoveAction)
+        self.drag_start_position = None  # Clear position after drag
+        
+    def mouseReleaseEvent(self, e):
+        self.drag_start_position = None  # Clear position on release
+        super().mouseReleaseEvent(e)
+
     def show_context_menu(self, pos):
         menu = QMenu(self)
         edit_action = menu.addAction("Edit")
@@ -85,6 +95,187 @@ class BookmarkButton(QToolButton):
         dialog.title_input.setText(self.text())
         dialog.url_input.setText(self.url)
         dialog.exec_()
+
+class FolderButton(QToolButton):
+    def __init__(self, name, parent=None):
+        super().__init__(parent)
+        self.setText(name)
+        self.setAcceptDrops(True)
+        self.folder_name = name
+        self.setPopupMode(QToolButton.InstantPopup)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent):
+        url = event.mimeData().text()
+        title = event.source().text()
+        
+        try:
+            with open("browser_bookmarks.json", "r") as f:
+                bookmarks = json.load(f)
+            
+            # Find and update the bookmark's folder
+            for bookmark in bookmarks["bookmarks"]:
+                if bookmark["url"] == url and bookmark["title"] == title:
+                    bookmark["folder"] = self.folder_name
+                    break
+                    
+            with open("browser_bookmarks.json", "w") as f:
+                json.dump(bookmarks, f)
+                
+            # Update the bookmark bar
+            if self.parent():
+                self.parent().parent().update_bookmark_bar()
+                
+        except Exception as e:
+            print(f"Error moving bookmark: {e}")
+
+class DraggableAction(QAction):
+    def __init__(self, title, url, parent=None):
+        super().__init__(title, parent)
+        self.title = title
+        self.url = url
+        self.setData({"title": title, "url": url})  # Store data for drag
+
+class FolderMenu(QMenu):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.drag_start_position = None
+        self.drag_action = None
+
+    def mousePressEvent(self, e):
+        action = self.actionAt(e.pos())
+        if isinstance(action, DraggableAction) and e.button() == Qt.LeftButton:
+            drag = QDrag(self)
+            mime = QMimeData()
+            mime.setText(action.url)
+            mime.setProperty('title', action.title)
+            drag.setMimeData(mime)
+            
+            # Start drag operation
+            if drag.exec_(Qt.MoveAction) == Qt.MoveAction:
+                try:
+                    with open("browser_bookmarks.json", "r") as f:
+                        bookmarks = json.load(f)
+                    
+                    # Find and update the bookmark's folder
+                    for bookmark in bookmarks["bookmarks"]:
+                        if bookmark["url"] == action.url and bookmark["title"] == action.title:
+                            bookmark["folder"] = "No Folder"
+                            break
+                            
+                    with open("browser_bookmarks.json", "w") as f:
+                        json.dump(bookmarks, f)
+                        
+                    # Update the bookmark bar
+                    if self.parent() and hasattr(self.parent().parent(), 'update_bookmark_bar'):
+                        self.parent().parent().update_bookmark_bar()
+                        
+                except Exception as e:
+                    print(f"Error moving bookmark: {e}")
+        else:
+            super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if not hasattr(self, 'drag_action') or not self.drag_action:
+            return super().mouseMoveEvent(e)
+        
+        if not e.buttons() & Qt.LeftButton:
+            return
+
+        if not self.drag_start_position:
+            return
+            
+        if (e.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
+            return
+
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setText(self.drag_action.url)
+        mime.setProperty('title', self.drag_action.title)
+        drag.setMimeData(mime)
+
+        action = self.drag_action  # Store reference before exec
+        result = drag.exec_(Qt.MoveAction)
+        
+        if result == Qt.MoveAction:
+            try:
+                with open("browser_bookmarks.json", "r") as f:
+                    bookmarks = json.load(f)
+                
+                # Find and update the bookmark's folder
+                for bookmark in bookmarks["bookmarks"]:
+                    if (bookmark["url"] == action.url and 
+                        bookmark["title"] == action.title):
+                        bookmark["folder"] = "No Folder"
+                        break
+                        
+                with open("browser_bookmarks.json", "w") as f:
+                    json.dump(bookmarks, f)
+                    
+                # Update the bookmark bar
+                if self.parent() and hasattr(self.parent().parent(), 'update_bookmark_bar'):
+                    self.parent().parent().update_bookmark_bar()
+                    
+            except Exception as e:
+                print(f"Error moving bookmark: {e}")
+
+        # Clear drag data
+        self.drag_start_position = None
+        self.drag_action = None
+        
+    def mouseReleaseEvent(self, e):
+        # Clear drag data on release
+        self.drag_start_position = None
+        self.drag_action = None
+        super().mouseReleaseEvent(e)
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasText():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        e.acceptProposedAction()
+
+class BookmarkBar(QToolBar):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setMovable(False)
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent):
+        url = event.mimeData().text()
+        title = event.mimeData().property('title')
+        if not title:  # Fallback if title not in mime data
+            title = url
+        
+        try:
+            with open("browser_bookmarks.json", "r") as f:
+                bookmarks = json.load(f)
+            
+            # Find and update the bookmark's folder
+            for bookmark in bookmarks["bookmarks"]:
+                if bookmark["url"] == url:
+                    bookmark["folder"] = "No Folder"
+                    break
+                    
+            with open("browser_bookmarks.json", "w") as f:
+                json.dump(bookmarks, f)
+                
+            # Update the bookmark bar
+            if self.parent():
+                self.parent().update_bookmark_bar()
+                
+        except Exception as e:
+            print(f"Error moving bookmark: {e}")
 
 class Browser(QMainWindow):
     def __init__(self):
@@ -232,9 +423,10 @@ class Browser(QMainWindow):
         main_layout.addWidget(nav_widget)
         main_layout.addWidget(self.browser)
         
-        # Add bookmark bar
-        self.bookmark_bar = QToolBar("Bookmarks")
-        self.bookmark_bar.setMovable(False)
+        # Add bookmark bar with context menu
+        self.bookmark_bar = BookmarkBar(self)  # Use custom BookmarkBar class
+        self.bookmark_bar.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.bookmark_bar.customContextMenuRequested.connect(self.show_bookmark_bar_context_menu)
         self.addToolBar(self.bookmark_bar)
         self.update_bookmark_bar()
         
@@ -455,12 +647,9 @@ class Browser(QMainWindow):
             folder_menus = {}
             for folder in bookmarks.get("folders", []):
                 folder_name = folder["name"]
-                folder_button = QToolButton(self.bookmark_bar)
-                folder_button.setText(folder_name)
-                folder_button.setPopupMode(QToolButton.InstantPopup)
-                folder_menu = QMenu(folder_button)
+                folder_button = FolderButton(folder_name, self.bookmark_bar)
+                folder_menu = FolderMenu(folder_button)  # Use custom menu class
                 folder_button.setMenu(folder_menu)
-                folder_button.setContextMenuPolicy(Qt.CustomContextMenu)
                 folder_button.customContextMenuRequested.connect(
                     lambda pos, name=folder_name: self.show_folder_context_menu(pos, name)
                 )
@@ -471,11 +660,11 @@ class Browser(QMainWindow):
             for bookmark in bookmarks.get("bookmarks", []):
                 folder = bookmark.get("folder", "No Folder")
                 if folder != "No Folder" and folder in folder_menus:
-                    # Add to folder menu
-                    action = folder_menus[folder].addAction(bookmark["title"])
-                    url = bookmark["url"]
+                    # Add draggable action to folder menu
+                    action = DraggableAction(bookmark["title"], bookmark["url"], folder_menus[folder])
+                    folder_menus[folder].addAction(action)
                     action.triggered.connect(
-                        lambda checked=False, url=url: self.browser.setUrl(QUrl(url))
+                        lambda checked=False, url=bookmark["url"]: self.browser.setUrl(QUrl(url))
                     )
                 else:
                     # Only add to bar if not in a folder
@@ -501,30 +690,69 @@ class Browser(QMainWindow):
             self.delete_folder(folder_name)
 
     def delete_folder(self, folder_name):
-        """Delete folder and move its bookmarks to No Folder"""
+        """Delete folder and move its bookmarks to the main bar"""
         try:
             with open("browser_bookmarks.json", "r") as f:
                 bookmarks = json.load(f)
             
-            # Remove folder
+            # Remove folder from folders list
             bookmarks["folders"] = [f for f in bookmarks["folders"] 
                                   if f["name"] != folder_name]
             
-            # Move bookmarks to No Folder
+            # Move bookmarks to No Folder but preserve them
             for bookmark in bookmarks["bookmarks"]:
                 if bookmark.get("folder") == folder_name:
-                    bookmark["folder"] = "No Folder"
+                    bookmark["folder"] = "No Folder"  # Just change folder, don't remove bookmark
             
+            # Save changes
             with open("browser_bookmarks.json", "w") as f:
                 json.dump(bookmarks, f)
                 
+            # Update the bookmark bar to show the changes
             self.update_bookmark_bar()
+            
         except Exception as e:
             print(f"Error deleting folder: {e}")
 
+    def show_bookmark_bar_context_menu(self, pos):
+        """Show context menu for bookmark bar"""
+        menu = QMenu(self)
+        add_folder_action = menu.addAction("Add Folder")
+        menu.addSeparator()
+        hide_action = menu.addAction("Hide Bookmark Bar")
+        action = menu.exec_(self.bookmark_bar.mapToGlobal(pos))
+        
+        if action == hide_action:
+            self.bookmark_bar.setVisible(False)
+            self.toggle_bookmarks_action.setChecked(False)
+        elif action == add_folder_action:
+            self.add_bookmark_folder()
+
+    def add_bookmark_folder(self):
+        """Add a new bookmark folder"""
+        folder_name, ok = QInputDialog.getText(self, "New Folder", "Folder name:")
+        if ok and folder_name:
+            try:
+                with open("browser_bookmarks.json", "r") as f:
+                    bookmarks = json.load(f)
+            except FileNotFoundError:
+                bookmarks = {"folders": [], "bookmarks": []}
+
+            # Add new folder
+            bookmarks["folders"].append({"name": folder_name})
+            
+            # Save changes
+            with open("browser_bookmarks.json", "w") as f:
+                json.dump(bookmarks, f)
+                
+            # Update the bookmark bar
+            self.update_bookmark_bar()
+
     def toggle_bookmark_bar(self):
         """Toggle bookmark bar visibility"""
-        self.bookmark_bar.setVisible(self.toggle_bookmarks_action.isChecked())
+        is_visible = self.toggle_bookmarks_action.isChecked()
+        self.bookmark_bar.setVisible(is_visible)
+        # No need to update the action's checked state as it's already correct
 
     def show_bookmarks(self):
         """Show the bookmark manager dialog"""
