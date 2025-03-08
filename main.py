@@ -1,9 +1,10 @@
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                           QWidget, QLineEdit, QPushButton, QMenu, QAction, QDialog,
-                          QTableWidgetItem, QStatusBar, QLabel)  
+                          QTableWidgetItem, QStatusBar, QLabel, QToolBar, QToolButton)
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings, QWebEnginePage, QWebEngineProfile
-from PyQt5.QtCore import QUrl, QObject, pyqtSlot, QTimer
+from PyQt5.QtCore import QUrl, QObject, pyqtSlot, QTimer, Qt, QMimeData
 from PyQt5.QtWebEngineCore import QWebEngineUrlRequestInterceptor
+from PyQt5.QtGui import QDrag
 import os
 import sys
 import json
@@ -14,6 +15,7 @@ from history import History
 from downloads import Downloads
 from datetime import datetime
 import tempfile
+from bookmarks import BookmarkManager
 
 class AdBlocker(QWebEngineUrlRequestInterceptor):
     def interceptRequest(self, info):
@@ -25,6 +27,64 @@ class AdBlocker(QWebEngineUrlRequestInterceptor):
         ]
         if any(domain in url.lower() for domain in blocked_domains):
             info.block(True)
+
+class BookmarkButton(QToolButton):
+    def __init__(self, title, url, parent=None):
+        super().__init__(parent)
+        self.setText(title)
+        self.url = url
+        self.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.show_context_menu)
+        
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.drag_start_position = e.pos()
+        super().mousePressEvent(e)
+        
+    def mouseMoveEvent(self, e):
+        if not (e.buttons() & Qt.LeftButton):
+            return
+        if (e.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
+            return
+            
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setText(self.url)
+        drag.setMimeData(mime)
+        drag.exec_(Qt.MoveAction)
+        
+    def show_context_menu(self, pos):
+        menu = QMenu(self)
+        edit_action = menu.addAction("Edit")
+        delete_action = menu.addAction("Delete")
+        action = menu.exec_(self.mapToGlobal(pos))
+        
+        if action == delete_action:
+            self.delete_bookmark()
+        elif action == edit_action:
+            self.edit_bookmark()
+            
+    def delete_bookmark(self):
+        try:
+            with open("browser_bookmarks.json", "r") as f:
+                bookmarks = json.load(f)
+            
+            bookmarks["bookmarks"] = [b for b in bookmarks["bookmarks"] 
+                                    if not (b["title"] == self.text() and b["url"] == self.url)]
+            
+            with open("browser_bookmarks.json", "w") as f:
+                json.dump(bookmarks, f)
+                
+            self.parent().update_bookmark_bar()
+        except Exception as e:
+            print(f"Error deleting bookmark: {e}")
+            
+    def edit_bookmark(self):
+        dialog = BookmarkManager(self.parent())
+        dialog.title_input.setText(self.text())
+        dialog.url_input.setText(self.url)
+        dialog.exec_()
 
 class Browser(QMainWindow):
     def __init__(self):
@@ -145,17 +205,38 @@ class Browser(QMainWindow):
         downloads_action.triggered.connect(self.show_downloads)
         settings_menu.addAction(downloads_action)
         
+        bookmarks_action = QAction("Manage Bookmarks", self)
+        bookmarks_action.triggered.connect(self.show_bookmarks)
+        settings_menu.addAction(bookmarks_action)
+        
+        add_bookmark_action = QAction("Add to Bookmarks", self)
+        add_bookmark_action.triggered.connect(self.add_current_to_bookmarks)
+        settings_menu.addAction(add_bookmark_action)
+        
         settings_menu.addSeparator()
         
         about_action = QAction("About", self)
         about_action.triggered.connect(self.show_about)  
         settings_menu.addAction(about_action)
         
+        # Add show/hide bookmark bar action
+        self.toggle_bookmarks_action = QAction("Show Bookmark Bar", self)
+        self.toggle_bookmarks_action.setCheckable(True)
+        self.toggle_bookmarks_action.setChecked(True)
+        self.toggle_bookmarks_action.triggered.connect(self.toggle_bookmark_bar)
+        settings_menu.addAction(self.toggle_bookmarks_action)
+        
         settings_button.clicked.connect(lambda: settings_menu.exec_(settings_button.mapToGlobal(settings_button.rect().bottomRight())))
         nav_layout.addWidget(settings_button)
         
         main_layout.addWidget(nav_widget)
         main_layout.addWidget(self.browser)
+        
+        # Add bookmark bar
+        self.bookmark_bar = QToolBar("Bookmarks")
+        self.bookmark_bar.setMovable(False)
+        self.addToolBar(self.bookmark_bar)
+        self.update_bookmark_bar()
         
         # Set the main layout
         container = QWidget()
@@ -190,6 +271,13 @@ class Browser(QMainWindow):
             'pixel', 'statistics', 'stats',
             'tracking', 'adserver', 'monitor'
         ]
+        
+        # Add search engine URLs
+        self.search_engines = {
+            "google": "https://www.google.com/search?q={}",
+            "duckduckgo": "https://duckduckgo.com/?q={}",
+            "bing": "https://www.bing.com/search?q={}"
+        }
         
     def load_and_apply_settings(self):
         try:
@@ -232,11 +320,27 @@ class Browser(QMainWindow):
             self.set_status("Failed to load page")  # Updated method name
             
     def navigate_to_url(self):
-        url = self.url_bar.text()
-        if not url.startswith(('http://', 'https://')):
-            url = 'https://' + url
-        self.set_status(f"Loading: {url}")  # Updated method name
-        self.browser.setUrl(QUrl(url))
+        url = self.url_bar.text().strip()
+        
+        # Check if it's a valid URL
+        if any([
+            url.startswith(('http://', 'https://')),  # Has protocol
+            url.split('.')[-1].lower() in ['com', 'org', 'net', 'edu', 'gov', 'io'],  # Common TLDs
+            '.' in url and '/' in url,  # Likely a URL with path
+            url.startswith('localhost'),  # Local development
+            url.startswith('127.0.0.1'),  # Local development
+        ]):
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
+            self.browser.setUrl(QUrl(url))
+        else:
+            # Use search engine
+            engine = self.settings.get("search_engine", "duckduckgo").lower()
+            search_url = self.search_engines.get(engine, self.search_engines["duckduckgo"])
+            search_url = search_url.format(url.replace(' ', '+'))
+            self.browser.setUrl(QUrl(search_url))
+            
+        self.set_status(f"Loading: {url}")
 
     def update_url(self, url):        
         self.url_bar.setText(url.toString())
@@ -320,6 +424,136 @@ class Browser(QMainWindow):
         """Update the status bar message."""
         if hasattr(self, 'status_label'):
             self.status_label.setText(message)
+            
+    def update_bookmark_bar(self):
+        """Update the bookmark bar with current bookmarks"""
+        self.bookmark_bar.clear()
+        try:
+            with open("browser_bookmarks.json", "r") as f:
+                data = json.load(f)
+                
+            # Initialize empty structure if file exists but is old format
+            if isinstance(data, list):
+                bookmarks = {
+                    "folders": [],
+                    "bookmarks": []
+                }
+                # Convert old bookmarks to new format
+                for item in data:
+                    bookmarks["bookmarks"].append({
+                        "title": item.get("title", ""),
+                        "url": item.get("url", ""),
+                        "folder": "No Folder"
+                    })
+                # Save in new format
+                with open("browser_bookmarks.json", "w") as f:
+                    json.dump(bookmarks, f)
+            else:
+                bookmarks = data
+
+            # Create folder menus
+            folder_menus = {}
+            for folder in bookmarks.get("folders", []):
+                folder_name = folder["name"]
+                folder_button = QToolButton(self.bookmark_bar)
+                folder_button.setText(folder_name)
+                folder_button.setPopupMode(QToolButton.InstantPopup)
+                folder_menu = QMenu(folder_button)
+                folder_button.setMenu(folder_menu)
+                folder_button.setContextMenuPolicy(Qt.CustomContextMenu)
+                folder_button.customContextMenuRequested.connect(
+                    lambda pos, name=folder_name: self.show_folder_context_menu(pos, name)
+                )
+                self.bookmark_bar.addWidget(folder_button)
+                folder_menus[folder_name] = folder_menu
+
+            # Add bookmarks
+            for bookmark in bookmarks.get("bookmarks", []):
+                folder = bookmark.get("folder", "No Folder")
+                if folder != "No Folder" and folder in folder_menus:
+                    # Add to folder menu
+                    action = folder_menus[folder].addAction(bookmark["title"])
+                    url = bookmark["url"]
+                    action.triggered.connect(
+                        lambda checked=False, url=url: self.browser.setUrl(QUrl(url))
+                    )
+                else:
+                    # Only add to bar if not in a folder
+                    if folder == "No Folder":
+                        button = BookmarkButton(bookmark["title"], bookmark["url"], self)
+                        button.clicked.connect(
+                            lambda checked=False, url=bookmark["url"]: self.browser.setUrl(QUrl(url))
+                        )
+                        self.bookmark_bar.addWidget(button)
+
+        except FileNotFoundError:
+            bookmarks = {"folders": [], "bookmarks": []}
+            with open("browser_bookmarks.json", "w") as f:
+                json.dump(bookmarks, f)
+
+    def show_folder_context_menu(self, pos, folder_name):
+        """Show context menu for folder"""
+        menu = QMenu(self)
+        delete_action = menu.addAction("Delete Folder")
+        action = menu.exec_(self.bookmark_bar.mapToGlobal(pos))
+        
+        if action == delete_action:
+            self.delete_folder(folder_name)
+
+    def delete_folder(self, folder_name):
+        """Delete folder and move its bookmarks to No Folder"""
+        try:
+            with open("browser_bookmarks.json", "r") as f:
+                bookmarks = json.load(f)
+            
+            # Remove folder
+            bookmarks["folders"] = [f for f in bookmarks["folders"] 
+                                  if f["name"] != folder_name]
+            
+            # Move bookmarks to No Folder
+            for bookmark in bookmarks["bookmarks"]:
+                if bookmark.get("folder") == folder_name:
+                    bookmark["folder"] = "No Folder"
+            
+            with open("browser_bookmarks.json", "w") as f:
+                json.dump(bookmarks, f)
+                
+            self.update_bookmark_bar()
+        except Exception as e:
+            print(f"Error deleting folder: {e}")
+
+    def toggle_bookmark_bar(self):
+        """Toggle bookmark bar visibility"""
+        self.bookmark_bar.setVisible(self.toggle_bookmarks_action.isChecked())
+
+    def show_bookmarks(self):
+        """Show the bookmark manager dialog"""
+        dialog = BookmarkManager(self)
+        dialog.exec_()
+
+    def add_current_to_bookmarks(self):
+        """Add the current page to bookmarks"""
+        title = self.browser.page().title()
+        url = self.browser.url().toString()
+        
+        try:
+            with open("browser_bookmarks.json", "r") as f:
+                bookmarks = json.load(f)
+                if isinstance(bookmarks, list):
+                    bookmarks = {"folders": [], "bookmarks": bookmarks}
+        except FileNotFoundError:
+            bookmarks = {"folders": [], "bookmarks": []}
+            
+        bookmarks["bookmarks"].append({
+            "title": title,
+            "url": url,
+            "folder": "No Folder"
+        })
+        
+        with open("browser_bookmarks.json", "w") as f:
+            json.dump(bookmarks, f)
+            
+        self.update_bookmark_bar()
                 
 if __name__ == "__main__":    
     app = QApplication(sys.argv)    
