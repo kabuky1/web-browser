@@ -1,4 +1,42 @@
-.venv
-browser*.bak
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+ENV/
+*.so
+.pytest_cache/
+
+# Browser Data
 browser.db
-__pycache__
+browser.db-journal
+browser_*.json
+browser_*.json.bak
+browser_cookies/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.project
+.pydevproject
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+.directory
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# Qt specific
+*.qmlc
+*.jsc
+*.qm
