@@ -58,8 +58,8 @@ pip install -r requirements.txt
 
 2. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/secure-browser.git
-cd secure-browser
+git clone https://github.com/kabuky1/web-browser.git
+cd web-browser
 ```
 
 3. Initialize the database:
