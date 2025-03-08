@@ -38,6 +38,16 @@ class BookmarkButton(QToolButton):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
         self.drag_start_position = None
+        # Get browser reference immediately
+        self.browser = self.get_browser_window(parent)
+
+    def get_browser_window(self, widget):
+        """Find the main browser window instance"""
+        while widget is not None:
+            if isinstance(widget, Browser):  # Change to check for Browser class specifically
+                return widget
+            widget = widget.parent()
+        return None
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
@@ -78,16 +88,9 @@ class BookmarkButton(QToolButton):
             
     def delete_bookmark(self):
         try:
-            with open("browser_bookmarks.json", "r") as f:
-                bookmarks = json.load(f)
-            
-            bookmarks["bookmarks"] = [b for b in bookmarks["bookmarks"] 
-                                    if not (b["title"] == self.text() and b["url"] == self.url)]
-            
-            with open("browser_bookmarks.json", "w") as f:
-                json.dump(bookmarks, f)
-                
-            self.parent().update_bookmark_bar()
+            if self.browser and self.browser.db:
+                self.browser.db.delete_bookmark(self.text(), self.url)
+                self.browser.update_bookmark_bar()
         except Exception as e:
             print(f"Error deleting bookmark: {e}")
             
@@ -611,7 +614,7 @@ class Browser(QMainWindow):
         folder_menus = {}
         for folder in folders:
             folder_name = folder["name"]
-            folder_button = FolderButton(folder_name, self.bookmark_bar)
+            folder_button = FolderButton(folder_name, self)  # Pass self instead of bookmark_bar
             folder_menu = FolderMenu(folder_button)
             folder_button.setMenu(folder_menu)
             folder_button.customContextMenuRequested.connect(
@@ -631,7 +634,7 @@ class Browser(QMainWindow):
                 )
             else:
                 if folder == "No Folder":
-                    button = BookmarkButton(bookmark["title"], bookmark["url"], self)
+                    button = BookmarkButton(bookmark["title"], bookmark["url"], self)  # Pass self instead of bookmark_bar
                     button.clicked.connect(
                         lambda checked=False, url=bookmark["url"]: self.browser.setUrl(QUrl(url))
                     )

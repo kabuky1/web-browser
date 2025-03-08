@@ -1,8 +1,7 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
                            QTableWidget, QTableWidgetItem, QLineEdit, QLabel,
-                           QComboBox, QInputDialog, QMainWindow, QToolButton, QApplication)
-from PyQt5.QtCore import Qt, QMimeData
-from PyQt5.QtGui import QDrag, QDragEnterEvent, QDropEvent
+                           QComboBox, QInputDialog, QMainWindow)
+from PyQt5.QtCore import Qt
 from themes import apply_theme
 import json
 
@@ -173,65 +172,3 @@ class BookmarkManager(QDialog):
             self.load_bookmarks()
             if self.browser:
                 self.browser.update_bookmark_bar()
-
-class BookmarkButton(QToolButton):
-    def __init__(self, title, url, parent=None):
-        super().__init__(parent)
-        self.setText(title)
-        self.url = url
-        self.browser = self.get_browser_window(parent)
-        self.drag_start_position = None
-
-    def get_browser_window(self, widget):
-        """Find the main browser window instance"""
-        while widget is not None:
-            if hasattr(widget, 'update_bookmark_bar'):
-                return widget
-            widget = widget.parent()
-        return None
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.LeftButton:
-            self.drag_start_position = e.pos()
-        super().mousePressEvent(e)
-
-    def mouseMoveEvent(self, e):
-        if not (e.buttons() & Qt.LeftButton):
-            return
-        if (e.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
-            return
-            
-        drag = QDrag(self)
-        mime = QMimeData()
-        mime.setText(self.url)  # Store URL for drop handling
-        drag.setMimeData(mime)
-        
-        # Set drag pixmap or icon if desired
-        # drag.setPixmap(self.icon().pixmap(32, 32))
-        
-        if drag.exec_(Qt.MoveAction) == Qt.MoveAction:
-            # The bookmark was successfully moved to a folder
-            pass
-
-    def delete_bookmark(self):
-        try:
-            with open("browser_bookmarks.json", "r") as f:
-                bookmarks = json.load(f)
-            
-            bookmarks["bookmarks"] = [b for b in bookmarks["bookmarks"] 
-                                    if not (b["title"] == self.text() and b["url"] == self.url)]
-            
-            with open("browser_bookmarks.json", "w") as f:
-                json.dump(bookmarks, f)
-                
-            if self.browser:
-                self.browser.update_bookmark_bar()
-        except Exception as e:
-            print(f"Error deleting bookmark: {e}")
-            
-    def edit_bookmark(self):
-        if self.browser:
-            dialog = BookmarkManager(self.browser)
-            dialog.title_input.setText(self.text())
-            dialog.url_input.setText(self.url)
-            dialog.exec_()

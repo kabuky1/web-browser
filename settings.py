@@ -16,7 +16,7 @@ class Settings(QDialog):
         # Default settings
         self.default_settings = {
             "homepage": "https://www.duckduckgo.com",
-            "search_engine": "duckduckgo",  # lowercase default
+            "search_engine": "duckduckgo", 
             "enable_cookies": True,
             "enable_javascript": True,
             "download_path": os.path.expanduser("~/Downloads"),
@@ -74,7 +74,7 @@ class Settings(QDialog):
         search_layout = QHBoxLayout()
         search_layout.addWidget(QLabel("Search Engine:"))
         self.search_combo = QComboBox()
-        search_engines = ["DuckDuckGo", "Google", "Bing"]  # Make DuckDuckGo first
+        search_engines = ["DuckDuckGo", "Google", "Bing"]  
         self.search_combo.addItems(search_engines)
         
         # Set current search engine (case-insensitive comparison)
@@ -145,7 +145,7 @@ class Settings(QDialog):
     def save_settings(self):
         settings = {
             "homepage": self.homepage_input.text(),
-            "search_engine": self.search_combo.currentText().lower(),  # ensure lowercase
+            "search_engine": self.search_combo.currentText().lower(),  
             "enable_cookies": self.cookie_checkbox.isChecked(),
             "enable_javascript": self.js_checkbox.isChecked(),
             "download_path": self.current_settings["download_path"],
