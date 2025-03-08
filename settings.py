@@ -92,9 +92,17 @@ class Settings(QDialog):
         privacy_tab = QWidget()
         privacy_layout = QVBoxLayout(privacy_tab)
         
+        # Cookie settings
+        cookie_group = QVBoxLayout()
         self.cookie_checkbox = QCheckBox("Enable Cookies")
         self.cookie_checkbox.setChecked(self.current_settings["enable_cookies"])
-        privacy_layout.addWidget(self.cookie_checkbox)
+        cookie_group.addWidget(self.cookie_checkbox)
+        
+        # Add Clear Cookies button
+        clear_cookies_button = QPushButton("Clear All Cookies")
+        cookie_group.addWidget(clear_cookies_button)
+        
+        privacy_layout.addLayout(cookie_group)
         
         self.js_checkbox = QCheckBox("Enable JavaScript")
         self.js_checkbox.setChecked(self.current_settings["enable_javascript"])
