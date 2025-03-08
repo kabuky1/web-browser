@@ -53,7 +53,7 @@ A privacy-focused web browser built with PyQt5, featuring built-in ad blocking, 
 
 1. Install the required packages:
 ```bash
-pip install PyQt5 PyQtWebEngine
+pip install -r requirements.txt
 ```
 
 2. Clone the repository:
@@ -62,10 +62,21 @@ git clone https://github.com/yourusername/secure-browser.git
 cd secure-browser
 ```
 
-3. Run the browser:
+3. Initialize the database:
+```bash
+python -c "from database import Database; Database()"
+```
+
+4. Run the browser:
 ```bash
 python main.py
 ```
+
+## Database Migration
+- When first run, the browser will automatically migrate existing JSON data to SQLite
+- Backup files will be created with `.bak` extension
+- The database file `browser.db` will be created in the browser directory
+- All settings, bookmarks, and history will be stored in the database
 
 ## Usage
 

@@ -10,6 +10,7 @@ class BookmarkManager(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.browser = self.get_browser_window(parent)
+        self.db = self.browser.db if self.browser else None
         self.setWindowTitle("Manage Bookmarks")
         self.setFixedSize(600, 400)
         
@@ -81,26 +82,24 @@ class BookmarkManager(QDialog):
         return None
 
     def load_bookmarks(self):
-        try:
-            with open("browser_bookmarks.json", "r") as f:
-                bookmarks = json.load(f)
-        except FileNotFoundError:
-            bookmarks = {"folders": [], "bookmarks": []}
+        if not self.db:
+            return
             
         # Update folder combo
         self.folder_combo.clear()
         self.folder_combo.addItem("No Folder")
-        for folder in bookmarks.get("folders", []):
+        folders = self.db.get_folders()
+        for folder in folders:
             self.folder_combo.addItem(folder["name"])
             
         # Load bookmarks
-        bookmarks_list = bookmarks.get("bookmarks", [])
-        self.table.setRowCount(len(bookmarks_list))
-        for i, bookmark in enumerate(bookmarks_list):
+        bookmarks = self.db.get_bookmarks()
+        self.table.setRowCount(len(bookmarks))
+        for i, bookmark in enumerate(bookmarks):
             self.table.setItem(i, 0, QTableWidgetItem(bookmark["title"]))
             self.table.setItem(i, 1, QTableWidgetItem(bookmark["url"]))
             self.table.setItem(i, 2, QTableWidgetItem(bookmark.get("folder", "No Folder")))
-            
+
     def save_bookmarks(self):
         bookmarks = {"folders": [], "bookmarks": []}
         
@@ -149,15 +148,13 @@ class BookmarkManager(QDialog):
         title = self.title_input.text()
         url = self.url_input.text()
         folder = self.folder_combo.currentText()
-        if title and url:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            self.table.setItem(row, 0, QTableWidgetItem(title))
-            self.table.setItem(row, 1, QTableWidgetItem(url))
-            self.table.setItem(row, 2, QTableWidgetItem(folder))
+        if title and url and self.db:
+            self.db.add_bookmark(title, url, folder if folder != "No Folder" else None)
+            self.load_bookmarks()
             self.title_input.clear()
             self.url_input.clear()
-            self.save_bookmarks()
+            if self.browser:
+                self.browser.update_bookmark_bar()
             
     def edit_bookmark(self):
         current_row = self.table.currentRow()
@@ -169,9 +166,13 @@ class BookmarkManager(QDialog):
             
     def delete_bookmark(self):
         current_row = self.table.currentRow()
-        if current_row >= 0:
-            self.table.removeRow(current_row)
-            self.save_bookmarks()
+        if current_row >= 0 and self.db:
+            title = self.table.item(current_row, 0).text()
+            url = self.table.item(current_row, 1).text()
+            self.db.delete_bookmark(title, url)
+            self.load_bookmarks()
+            if self.browser:
+                self.browser.update_bookmark_bar()
 
 class BookmarkButton(QToolButton):
     def __init__(self, title, url, parent=None):

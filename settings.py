@@ -9,6 +9,7 @@ class Settings(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.browser = parent  
+        self.db = parent.db if parent else None
         self.setWindowTitle("Browser Settings")
         self.setFixedSize(400, 500)
         
@@ -137,11 +138,9 @@ class Settings(QDialog):
         apply_theme(self, theme_name.lower())
 
     def load_settings(self):
-        try:
-            with open("browser_settings.json", "r") as f:
-                return json.load(f)
-        except FileNotFoundError:
+        if not self.db:
             return self.default_settings.copy()
+        return self.db.load_settings() or self.default_settings.copy()
 
     def save_settings(self):
         settings = {
@@ -153,8 +152,8 @@ class Settings(QDialog):
             "theme": self.theme_combo.currentText().lower()
         }
         
-        with open("browser_settings.json", "w") as f:
-            json.dump(settings, f)
+        if self.db:
+            self.db.save_settings(settings)
         
         # Store settings in browser
         if self.browser:

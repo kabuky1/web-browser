@@ -9,6 +9,7 @@ class History(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.browser = parent
+        self.db = parent.db if parent else None
         self.setWindowTitle("Browsing History")
         self.setFixedSize(600, 400)
         
@@ -38,19 +39,17 @@ class History(QDialog):
         self.load_history()
         
     def load_history(self):
-        try:
-            with open("browser_history.json", "r") as f:
-                history = json.load(f)
-        except FileNotFoundError:
-            history = []
+        if not self.db:
+            return
             
+        history = self.db.get_history()
         self.table.setRowCount(len(history))
         for i, entry in enumerate(history):
-            self.table.setItem(i, 0, QTableWidgetItem(entry.get("title", "")))
-            self.table.setItem(i, 1, QTableWidgetItem(entry.get("url", "")))
-            self.table.setItem(i, 2, QTableWidgetItem(entry.get("date", "")))
+            self.table.setItem(i, 0, QTableWidgetItem(entry["title"]))
+            self.table.setItem(i, 1, QTableWidgetItem(entry["url"]))
+            self.table.setItem(i, 2, QTableWidgetItem(entry["date"]))
     
     def clear_history(self):
+        if self.db:
+            self.db.clear_history()
         self.table.setRowCount(0)
-        with open("browser_history.json", "w") as f:
-            json.dump([], f)

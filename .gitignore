@@ -1,0 +1,4 @@
+.venv
+browser*.bak
+browser.db
+__pycache__

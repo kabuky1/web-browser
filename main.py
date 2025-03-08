@@ -16,6 +16,7 @@ from downloads import Downloads
 from datetime import datetime
 import tempfile
 from bookmarks import BookmarkManager
+from database import Database
 
 class AdBlocker(QWebEngineUrlRequestInterceptor):
     def interceptRequest(self, info):
@@ -280,6 +281,8 @@ class BookmarkBar(QToolBar):
 class Browser(QMainWindow):
     def __init__(self):
         super().__init__()
+        # Initialize database
+        self.db = Database()
         self.setWindowTitle("Secure Browser")
         self.setGeometry(300, 300, 1024, 768)
         
@@ -472,10 +475,8 @@ class Browser(QMainWindow):
         }
         
     def load_and_apply_settings(self):
-        try:
-            with open("browser_settings.json", "r") as f:
-                self.settings = json.load(f)
-        except FileNotFoundError:
+        self.settings = self.db.load_settings()
+        if not self.settings:
             self.settings = {
                 "homepage": "https://www.duckduckgo.com",
                 "search_engine": "duckduckgo",
@@ -484,10 +485,7 @@ class Browser(QMainWindow):
                 "theme": "dracula",
                 "download_path": os.path.expanduser("~/Downloads")
             }
-            with open("browser_settings.json", "w") as f:
-                json.dump(self.settings, f)
-        
-        # Apply theme immediately
+            self.db.save_settings(self.settings)
         apply_theme(self, self.settings.get("theme", "dracula"))
 
     def open_settings(self):
@@ -543,22 +541,7 @@ class Browser(QMainWindow):
         
     def update_history(self, title):
         url = self.browser.url().toString()
-        entry = {
-            "title": title,
-            "url": url,
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        
-        try:
-            with open("browser_history.json", "r") as f:
-                history = json.load(f)
-        except FileNotFoundError:
-            history = []
-            
-        history.append(entry)
-        
-        with open("browser_history.json", "w") as f:
-            json.dump(history, f)
+        self.db.add_history_entry(title, url)
 
     def handle_download(self, download):
         path = os.path.join(
@@ -618,67 +601,41 @@ class Browser(QMainWindow):
             self.status_label.setText(message)
             
     def update_bookmark_bar(self):
-        """Update the bookmark bar with current bookmarks"""
         self.bookmark_bar.clear()
-        try:
-            with open("browser_bookmarks.json", "r") as f:
-                data = json.load(f)
-                
-            # Initialize empty structure if file exists but is old format
-            if isinstance(data, list):
-                bookmarks = {
-                    "folders": [],
-                    "bookmarks": []
-                }
-                # Convert old bookmarks to new format
-                for item in data:
-                    bookmarks["bookmarks"].append({
-                        "title": item.get("title", ""),
-                        "url": item.get("url", ""),
-                        "folder": "No Folder"
-                    })
-                # Save in new format
-                with open("browser_bookmarks.json", "w") as f:
-                    json.dump(bookmarks, f)
-            else:
-                bookmarks = data
+        
+        # Get folders and bookmarks from database
+        folders = self.db.get_folders()
+        bookmarks = self.db.get_bookmarks()
+        
+        # Create folder menus
+        folder_menus = {}
+        for folder in folders:
+            folder_name = folder["name"]
+            folder_button = FolderButton(folder_name, self.bookmark_bar)
+            folder_menu = FolderMenu(folder_button)
+            folder_button.setMenu(folder_menu)
+            folder_button.customContextMenuRequested.connect(
+                lambda pos, name=folder_name: self.show_folder_context_menu(pos, name)
+            )
+            self.bookmark_bar.addWidget(folder_button)
+            folder_menus[folder_name] = folder_menu
 
-            # Create folder menus
-            folder_menus = {}
-            for folder in bookmarks.get("folders", []):
-                folder_name = folder["name"]
-                folder_button = FolderButton(folder_name, self.bookmark_bar)
-                folder_menu = FolderMenu(folder_button)  # Use custom menu class
-                folder_button.setMenu(folder_menu)
-                folder_button.customContextMenuRequested.connect(
-                    lambda pos, name=folder_name: self.show_folder_context_menu(pos, name)
+        # Add bookmarks
+        for bookmark in bookmarks:
+            folder = bookmark.get("folder", "No Folder")
+            if folder != "No Folder" and folder in folder_menus:
+                action = DraggableAction(bookmark["title"], bookmark["url"], folder_menus[folder])
+                folder_menus[folder].addAction(action)
+                action.triggered.connect(
+                    lambda checked=False, url=bookmark["url"]: self.browser.setUrl(QUrl(url))
                 )
-                self.bookmark_bar.addWidget(folder_button)
-                folder_menus[folder_name] = folder_menu
-
-            # Add bookmarks
-            for bookmark in bookmarks.get("bookmarks", []):
-                folder = bookmark.get("folder", "No Folder")
-                if folder != "No Folder" and folder in folder_menus:
-                    # Add draggable action to folder menu
-                    action = DraggableAction(bookmark["title"], bookmark["url"], folder_menus[folder])
-                    folder_menus[folder].addAction(action)
-                    action.triggered.connect(
+            else:
+                if folder == "No Folder":
+                    button = BookmarkButton(bookmark["title"], bookmark["url"], self)
+                    button.clicked.connect(
                         lambda checked=False, url=bookmark["url"]: self.browser.setUrl(QUrl(url))
                     )
-                else:
-                    # Only add to bar if not in a folder
-                    if folder == "No Folder":
-                        button = BookmarkButton(bookmark["title"], bookmark["url"], self)
-                        button.clicked.connect(
-                            lambda checked=False, url=bookmark["url"]: self.browser.setUrl(QUrl(url))
-                        )
-                        self.bookmark_bar.addWidget(button)
-
-        except FileNotFoundError:
-            bookmarks = {"folders": [], "bookmarks": []}
-            with open("browser_bookmarks.json", "w") as f:
-                json.dump(bookmarks, f)
+                    self.bookmark_bar.addWidget(button)
 
     def show_folder_context_menu(self, pos, folder_name):
         """Show context menu for folder"""
@@ -690,29 +647,8 @@ class Browser(QMainWindow):
             self.delete_folder(folder_name)
 
     def delete_folder(self, folder_name):
-        """Delete folder and move its bookmarks to the main bar"""
-        try:
-            with open("browser_bookmarks.json", "r") as f:
-                bookmarks = json.load(f)
-            
-            # Remove folder from folders list
-            bookmarks["folders"] = [f for f in bookmarks["folders"] 
-                                  if f["name"] != folder_name]
-            
-            # Move bookmarks to No Folder but preserve them
-            for bookmark in bookmarks["bookmarks"]:
-                if bookmark.get("folder") == folder_name:
-                    bookmark["folder"] = "No Folder"  # Just change folder, don't remove bookmark
-            
-            # Save changes
-            with open("browser_bookmarks.json", "w") as f:
-                json.dump(bookmarks, f)
-                
-            # Update the bookmark bar to show the changes
-            self.update_bookmark_bar()
-            
-        except Exception as e:
-            print(f"Error deleting folder: {e}")
+        self.db.delete_bookmark_folder(folder_name)
+        self.update_bookmark_bar()
 
     def show_bookmark_bar_context_menu(self, pos):
         """Show context menu for bookmark bar"""
@@ -729,23 +665,9 @@ class Browser(QMainWindow):
             self.add_bookmark_folder()
 
     def add_bookmark_folder(self):
-        """Add a new bookmark folder"""
         folder_name, ok = QInputDialog.getText(self, "New Folder", "Folder name:")
         if ok and folder_name:
-            try:
-                with open("browser_bookmarks.json", "r") as f:
-                    bookmarks = json.load(f)
-            except FileNotFoundError:
-                bookmarks = {"folders": [], "bookmarks": []}
-
-            # Add new folder
-            bookmarks["folders"].append({"name": folder_name})
-            
-            # Save changes
-            with open("browser_bookmarks.json", "w") as f:
-                json.dump(bookmarks, f)
-                
-            # Update the bookmark bar
+            self.db.add_bookmark_folder(folder_name)
             self.update_bookmark_bar()
 
     def toggle_bookmark_bar(self):
@@ -760,27 +682,9 @@ class Browser(QMainWindow):
         dialog.exec_()
 
     def add_current_to_bookmarks(self):
-        """Add the current page to bookmarks"""
         title = self.browser.page().title()
         url = self.browser.url().toString()
-        
-        try:
-            with open("browser_bookmarks.json", "r") as f:
-                bookmarks = json.load(f)
-                if isinstance(bookmarks, list):
-                    bookmarks = {"folders": [], "bookmarks": bookmarks}
-        except FileNotFoundError:
-            bookmarks = {"folders": [], "bookmarks": []}
-            
-        bookmarks["bookmarks"].append({
-            "title": title,
-            "url": url,
-            "folder": "No Folder"
-        })
-        
-        with open("browser_bookmarks.json", "w") as f:
-            json.dump(bookmarks, f)
-            
+        self.db.add_bookmark(title, url)
         self.update_bookmark_bar()
                 
 if __name__ == "__main__":    
