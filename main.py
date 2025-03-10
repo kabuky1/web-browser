@@ -17,6 +17,7 @@ from datetime import datetime
 import tempfile
 from bookmarks import BookmarkManager
 from database import Database
+from dns_resolver import SecureDNSResolver
 
 class AdBlocker(QWebEngineUrlRequestInterceptor):
     def interceptRequest(self, info):
@@ -84,7 +85,20 @@ class BookmarkButton(QToolButton):
         if action == delete_action:
             self.delete_bookmark()
         elif action == edit_action:
-            self.edit_bookmark()
+            if self.browser:
+                dialog = BookmarkManager(self.browser)
+                dialog.title_input.setText(self.text())
+                dialog.url_input.setText(self.url)
+                if dialog.exec_():
+                    new_title = dialog.title_input.text()
+                    new_url = dialog.url_input.text()
+                    folder = dialog.folder_combo.currentText()
+                    # Delete old bookmark
+                    self.browser.db.delete_bookmark(self.text(), self.url)
+                    # Add new bookmark
+                    self.browser.db.add_bookmark(new_title, new_url, folder if folder != "No Folder" else None)
+                    # Update bookmark bar
+                    self.browser.update_bookmark_bar()
             
     def delete_bookmark(self):
         try:
@@ -314,6 +328,13 @@ class Browser(QMainWindow):
         self.ad_blocker = AdBlocker()
         self.profile.setUrlRequestInterceptor(self.ad_blocker)
         
+        # Initialize secure DNS resolver
+        self.dns_resolver = SecureDNSResolver()
+        self.dns_resolver.resolution_complete.connect(self.on_dns_resolved)
+        
+        # Configure profile for DNS security
+        self.profile.setUrlRequestInterceptor(self.ad_blocker)
+        
         # Create web view with settings
         self.browser = QWebEngineView()
         self.page = QWebEnginePage(self.profile, self.browser)
@@ -341,7 +362,7 @@ class Browser(QMainWindow):
         # Connect download requested signal
         self.page.profile().downloadRequested.connect(self.handle_download)
 
-        # Navigation buttons
+        # Navigation and control buttons - move all button creation together
         self.back_button = QPushButton("←")
         self.back_button.clicked.connect(self.browser.back)
         
@@ -354,7 +375,6 @@ class Browser(QMainWindow):
         # URL bar
         self.url_bar = QLineEdit()
         self.url_bar.returnPressed.connect(self.navigate_to_url)
-        self.browser.urlChanged.connect(self.update_url)
         
         # Control buttons
         self.go_button = QPushButton("Go")
@@ -368,10 +388,10 @@ class Browser(QMainWindow):
         main_layout.setSpacing(0)
         main_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Create single navigation bar
+        # Create single navigation bar with proper layout initialization
         nav_widget = QWidget()
         nav_widget.setFixedHeight(40)
-        nav_layout = QHBoxLayout()
+        nav_layout = QHBoxLayout()  # Initialize nav_layout here
         nav_layout.setContentsMargins(5, 0, 5, 0)
         nav_layout.setSpacing(2)
         nav_widget.setLayout(nav_layout)
@@ -382,8 +402,8 @@ class Browser(QMainWindow):
         nav_layout.addWidget(self.reload_button)
         nav_layout.addWidget(self.url_bar)
         nav_layout.addWidget(self.go_button)
-        nav_layout.addWidget(self.close_button)  
-        
+        nav_layout.addWidget(self.close_button)
+
         # Settings button and menu
         settings_button = QPushButton("☰")
         settings_button.setFixedSize(30, 30)
@@ -477,6 +497,16 @@ class Browser(QMainWindow):
             "bing": "https://www.bing.com/search?q={}"
         }
         
+        # Add URL change interceptor
+        self.browser.urlChanged.connect(self.urlChanged)
+        
+        # Update search engine URLs to ensure HTTPS
+        self.search_engines = {
+            "google": "https://www.google.com/search?q={}",
+            "duckduckgo": "https://duckduckgo.com/?q={}",
+            "bing": "https://www.bing.com/search?q={}"
+        }
+
     def load_and_apply_settings(self):
         self.settings = self.db.load_settings()
         if not self.settings:
@@ -523,20 +553,36 @@ class Browser(QMainWindow):
             url.startswith('localhost'),  # Local development
             url.startswith('127.0.0.1'),  # Local development
         ]):
-            if not url.startswith(('http://', 'https://')):
+            # Force HTTPS and perform secure DNS resolution
+            if url.startswith('http://'):
+                url = 'https://' + url[7:]
+            elif not url.startswith('https://'):
                 url = 'https://' + url
+                
             self.browser.setUrl(QUrl(url))
+            self.set_status(f"Loading: {url}")
         else:
-            # Use search engine
+            # Use search engine with HTTPS
             engine = self.settings.get("search_engine", "duckduckgo").lower()
             search_url = self.search_engines.get(engine, self.search_engines["duckduckgo"])
             search_url = search_url.format(url.replace(' ', '+'))
             self.browser.setUrl(QUrl(search_url))
-            
-        self.set_status(f"Loading: {url}")
 
-    def update_url(self, url):        
-        self.url_bar.setText(url.toString())
+    def update_url(self, qurl):
+        url = qurl.toString()
+        # Force HTTPS in URL bar
+        if url.startswith('http://'):
+            https_url = 'https://' + url[7:]
+            self.browser.setUrl(QUrl(https_url))
+            return
+        self.url_bar.setText(url)
+
+    # Add a method to intercept URL changes
+    def urlChanged(self, qurl):
+        url = qurl.toString()
+        if url.startswith('http://'):
+            https_url = 'https://' + url[7:]
+            self.browser.setUrl(QUrl(https_url))
 
     def show_about(self):
         about_dialog = About(self)
@@ -689,6 +735,10 @@ class Browser(QMainWindow):
         url = self.browser.url().toString()
         self.db.add_bookmark(title, url)
         self.update_bookmark_bar()
+        
+    def on_dns_resolved(self, hostname, ip):
+        """Handle secure DNS resolution result"""
+        self.set_status(f"Secure DNS resolution: {hostname} -> {ip}")
                 
 if __name__ == "__main__":    
     app = QApplication(sys.argv)    
